@@ -9,7 +9,10 @@ class SoundCloudAPI:
         self.s = create_requests_session()
 
     def _get(self, url: str, params: dict = {}):
-        return self.s.get(f'{self.api_base}{url}', params=params, headers={"Authorization": "OAuth " + self.access_token}).json()
+        r = self.s.get(f'{self.api_base}{url}', params=params, headers={"Authorization": "OAuth " + self.access_token})
+        if r.status_code not in [200, 201, 202]:
+            raise self.exception(r.text)
+        return r.json()
 
     def resolve_url(self, url: str):
         return self._get('resolve', {'identifier': url})
