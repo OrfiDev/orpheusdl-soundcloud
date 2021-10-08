@@ -8,10 +8,11 @@ from .soundcloud_api import SoundCloudAPI
 module_information = ModuleInformation(
     service_name = 'SoundCloud',
     module_supported_modes = ModuleModes.download,
-    flags = ModuleFlags.custom_url_parsing,
     session_settings = {'access_token': '', 'artist_download_ignore_tracks_in_albums': True},
     netlocation_constant = 'soundcloud',
-    test_url = 'https://soundcloud.com/alanwalker/darkside-feat-tomine-harket-au'
+    test_url = 'https://soundcloud.com/alanwalker/darkside-feat-tomine-harket-au',
+    url_decoding = ManualEnum.manual,
+    login_behaviour = ManualEnum.manual
 )
 
 
@@ -69,8 +70,7 @@ class ModuleInterface:
     
         return search_results
 
-    def get_track_tempdir(self, track_id): # Done like this since the header is slightly broken? Not sure why
-        track_url, codec = self.caches['file_url'][track_id]
+    def get_track_tempfile(self, track_url, codec): # Done like this since the header is slightly broken? Not sure why
         extension = codec_data[codec].container.name
         temp_location = download_to_temp(track_url, {"Authorization": "OAuth " + self.session.access_token}, extension)
         output_location = create_temp_filename() + '.' + extension
@@ -94,7 +94,6 @@ class ModuleInterface:
                 file_url = i['url']
                 codec = CodecEnum[i['preset'].split('_')[0].upper()]
                 download_type = DownloadEnum.TEMP_FILE_PATH if codec is CodecEnum.AAC else DownloadEnum.URL
-                self.caches['file_url'][track_id] = file_url, codec
                 break
         else:
             error = 'Track not streamable'
@@ -108,6 +107,7 @@ class ModuleInterface:
             download_type = download_type,
             file_url = file_url,
             file_url_headers = {"Authorization": "OAuth " + self.session.access_token},
+            tempfile_extra_data = (file_url, codec),
             codec = codec,
             sample_rate = 48,
             release_year = int(track_data['published_at'].split('/')[0]),
