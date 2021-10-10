@@ -21,24 +21,26 @@ class ModuleInterface:
         self.exception = module_controller.module_error
         settings = module_controller.module_settings
         self.session = SoundCloudAPI(settings['access_token'], module_controller.module_error)
+        
         self.dont_redownload_tracks = settings['artist_download_ignore_tracks_in_albums']
-
-        self.types = {'user': DownloadTypeEnum.artist, 'track': DownloadTypeEnum.track, 'playlist': DownloadTypeEnum.playlist, 'file_url': ''}
-        self.caches = {i:{} for i in self.types.keys()}
         self.already_downloaded = []
 
     def custom_url_parse(self, link):
+        types_ = {'user': DownloadTypeEnum.artist, 'track': DownloadTypeEnum.track, 'playlist': DownloadTypeEnum.playlist}
         results = self.session.resolve_url(link)
-        for i in self.types.keys():
+        for i in types_.keys():
             if i in results:
-                type_ = DownloadTypeEnum.album if i == 'playlist' and results[i]['is_album'] else self.types[i]
+                type_ = DownloadTypeEnum.album if i == 'playlist' and results[i]['is_album'] else types_[i]
                 id_ = results[i]['urn'].split(':')[-1]
-                self.caches[i][id_] = results[i]
                 break
         else:
             raise self.exception('URL is invalid')
-
-        return type_, id_
+        
+        return MediaIdentification(
+            media_type = type_,
+            media_id = id_,
+            extra_kwargs = {'data': {id_: results[i]}} if type_ == DownloadTypeEnum.track or type_ == DownloadTypeEnum.artist else {}
+        )
 
     def search(self, query_type: DownloadTypeEnum, query, tags: Tags = None, limit = 10):
         if query_type is DownloadTypeEnum.artist:
@@ -57,12 +59,12 @@ class ModuleInterface:
         for result in results['collection']:
             if qt != 'playlist' or (qt == 'playlist' and ((result['is_album'] and mode == 'album') or (not result['is_album'] and mode == 'playlist'))):
                 id_ = result['urn'].split(':')[-1]
-                self.caches[qt][id_] = result
                 search_results.append(SearchResult(
                     result_id = id_,
                     name = result['title'] if qt != 'user' else result['username'],
                     #artists = [f"{i['_embedded']['user']['first_name']} {i['_embedded']['user']['last_name']}"] if '_embedded' in i else None))
-                    artists = [result['_embedded']['user']['username']] if qt != 'user' else None
+                    artists = [result['_embedded']['user']['username']] if qt != 'user' else None,
+                    extra_kwargs = {'data': {id_: result}} if mode == 'track' or mode == 'artist' else {},
                 ))
                 i += 1
             if i >= limit:
@@ -70,30 +72,41 @@ class ModuleInterface:
     
         return search_results
 
-    def get_track_tempfile(self, track_url, codec): # Done like this since the header is slightly broken? Not sure why
-        extension = codec_data[codec].container.name
-        temp_location = download_to_temp(track_url, {"Authorization": "OAuth " + self.session.access_token}, extension)
-        output_location = create_temp_filename() + '.' + extension
-        try: # ffmpeg is used to correct the vorbis header, which is broken for some reason?
-            ffmpeg.input(temp_location, hide_banner=None, y=None).output(output_location, acodec='copy', loglevel='error').run()
-            silentremove(temp_location)
-        except:
-            print('FFmpeg is not installed or working! Using fallback, may have errors')
-            output_location = temp_location
-        return output_location
+    def get_track_download(self, track_url, codec):
+        if codec == CodecEnum.AAC: # Done like this since the header is slightly broken? Not sure why
+            extension = codec_data[codec].container.name
+            temp_location = download_to_temp(track_url, {"Authorization": "OAuth " + self.session.access_token}, extension)
+            output_location = create_temp_filename() + '.' + extension
+            try: # ffmpeg is used to correct the vorbis header, which is broken for some reason?
+                ffmpeg.input(temp_location, hide_banner=None, y=None).output(output_location, acodec='copy', loglevel='error').run()
+                silentremove(temp_location)
+            except:
+                print('FFmpeg is not installed or working! Using fallback, may have errors')
+                output_location = temp_location
 
-    def get_track_info(self, track_id, quality_tier: QualityEnum, codec_options: CodecOptions):
-        track_data = self.caches['track'][track_id]
+            return TrackDownloadInfo(
+                download_type = DownloadEnum.TEMP_FILE_PATH,
+                temp_file_path = output_location
+            )
+        else:
+            return TrackDownloadInfo(
+                download_type = DownloadEnum.URL,
+                file_url = track_url,
+                file_url_headers = {"Authorization": "OAuth " + self.session.access_token}
+            )
+
+    def get_track_info(self, track_id, quality_tier: QualityEnum, codec_options: CodecOptions, data, ignore=False):
+        track_data = data[track_id]
         file_url, codec = None, None
-        error = 'Already downloaded in album' if track_id in self.already_downloaded else None
+        error = 'Already downloaded in album' if track_id in self.already_downloaded and ignore else None
         self.already_downloaded.append(track_id) if self.dont_redownload_tracks else []
 
         # TODO: downloadable tracks should be done differently, not sure how
+        # TODO: add support for lower quality tiers
         for i in track_data['media']['transcodings']:
             if i['format']['protocol'] == 'progressive':
                 file_url = i['url']
                 codec = CodecEnum[i['preset'].split('_')[0].upper()]
-                download_type = DownloadEnum.TEMP_FILE_PATH if codec is CodecEnum.AAC else DownloadEnum.URL
                 break
         else:
             error = 'Track not streamable'
@@ -104,10 +117,7 @@ class ModuleInterface:
             album_id = '',
             artists = [track_data['_embedded']['user']['username']],
             artist_id = track_data['_embedded']['user']['permalink'],
-            download_type = download_type,
-            file_url = file_url,
-            file_url_headers = {"Authorization": "OAuth " + self.session.access_token},
-            tempfile_extra_data = (file_url, codec),
+            download_extra_kwargs = {'track_url': file_url, 'codec': codec},
             codec = codec,
             sample_rate = 48,
             release_year = int(track_data['published_at'].split('/')[0]),
@@ -120,7 +130,6 @@ class ModuleInterface:
     
     def get_album_info(self, album_id):
         playlist_data, tracks, cache_data = self.session.get_playlist(album_id)
-        self.caches['track'].update(cache_data)
 
         return AlbumInfo(
             name = playlist_data['title'],
@@ -128,12 +137,12 @@ class ModuleInterface:
             artist_id = playlist_data['_embedded']['user']['permalink'],
             cover_url = playlist_data['artwork_url_template'].replace('{size}', 'original'),
             release_year = int(playlist_data['release_date'].split('-')[0]),
-            tracks = tracks
+            tracks = tracks,
+            track_extra_kwargs = {'data': cache_data}
         )
     
     def get_playlist_info(self, playlist_id):
         playlist_data, tracks, cache_data = self.session.get_playlist(playlist_id)
-        self.caches['track'].update(cache_data)
         
         return PlaylistInfo(
             name = playlist_data['title'],
@@ -141,15 +150,16 @@ class ModuleInterface:
             creator_id = playlist_data['_embedded']['user']['permalink'],
             cover_url = playlist_data['artwork_url_template'].replace('{size}', 'original'),
             release_year = int(playlist_data['release_date'].split('-')[0]),
-            tracks = tracks
+            tracks = tracks,
+            track_extra_kwargs = {'data': cache_data}
         )
 
-    def get_artist_info(self, artist_id, get_credited_albums):
+    def get_artist_info(self, artist_id, get_credited_albums, data):
         albums, tracks, cache_data = self.session.get_user_albums_tracks(artist_id)
-        self.caches['track'].update(cache_data)
 
         return ArtistInfo(
-            name = self.caches['user'][artist_id]['username'],
+            name = data[artist_id]['username'],
             albums = albums,
-            tracks = tracks
+            tracks = tracks,
+            track_extra_kwargs = {'data': cache_data, 'ignore': True}
         )
