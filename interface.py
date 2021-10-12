@@ -8,7 +8,7 @@ from .soundcloud_api import SoundCloudWebAPI
 module_information = ModuleInformation(
     service_name = 'SoundCloud',
     module_supported_modes = ModuleModes.download,
-    session_settings = {'web_access_token': '', 'artist_download_ignore_tracks_in_albums': True},
+    session_settings = {'web_access_token': ''},
     netlocation_constant = 'soundcloud',
     test_url = 'https://soundcloud.com/alanwalker/darkside-feat-tomine-harket-au',
     url_decoding = ManualEnum.manual,
@@ -21,9 +21,6 @@ class ModuleInterface:
         self.exception = module_controller.module_error
         settings = module_controller.module_settings
         self.websession = SoundCloudWebAPI(settings['web_access_token'], module_controller.module_error)
-        
-        self.dont_redownload_tracks = settings['artist_download_ignore_tracks_in_albums']
-        self.already_downloaded = []
     
     @staticmethod
     def get_release_year(data):
@@ -105,11 +102,8 @@ class ModuleInterface:
         track_data = data[track_id]
         metadata = track_data.get('publisher_metadata')
         metadata = metadata if metadata else {}
-        file_url, codec = None, None
-        error = 'Already downloaded in album' if track_id in self.already_downloaded and ignore else None
-        self.already_downloaded.append(track_id) if self.dont_redownload_tracks else []
 
-        file_url, download_url, codec = None, None, CodecEnum.AAC
+        file_url, download_url, codec, error = None, None, CodecEnum.AAC, None
         if track_data['downloadable']:
             download_url = self.websession.get_track_download(track_id)
             codec = CodecEnum[self.websession.s.head(download_url).headers['Content-Type'].split('/')[1].replace('mpeg', 'mp3').replace('ogg', 'vorbis').upper()]
