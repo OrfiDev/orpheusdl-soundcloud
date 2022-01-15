@@ -21,7 +21,11 @@ class ModuleInterface:
         self.exception = module_controller.module_error
         settings = module_controller.module_settings
         self.websession = SoundCloudWebAPI(settings['web_access_token'], module_controller.module_error)
+
+        self.artists_split = lambda artists_string: artists_string.replace(' & ', ', ').replace(' and ', ', ').replace(' x ', ', ').split(', ') if ', ' in artists_string else [artists_string]
+        self.artwork_url_format = lambda artwork_url: artwork_url.replace('-large', '-original') if artwork_url else None
     
+
     @staticmethod
     def get_release_year(data):
         release_date = ''
@@ -32,6 +36,7 @@ class ModuleInterface:
         elif 'created_at' in data and data['created_at']:
             release_date = data['created_at']
         return int(release_date.split('-')[0])
+
 
     def custom_url_parse(self, link):
         types_ = {'user': DownloadTypeEnum.artist, 'track': DownloadTypeEnum.track, 'playlist': DownloadTypeEnum.playlist}
@@ -45,34 +50,27 @@ class ModuleInterface:
             extra_kwargs = {'data': {id_: result}}
         )
 
+
     def search(self, query_type: DownloadTypeEnum, query, tags: Tags = None, limit = 10):
         if query_type is DownloadTypeEnum.artist:
-            qt, mode = 'user', 'artist'
+            qt = 'users'
         elif query_type is DownloadTypeEnum.playlist:
-            qt, mode = 'playlist', 'playlist'
+            qt = 'playlists_without_albums'
         elif query_type is DownloadTypeEnum.album:
-            qt, mode = 'playlist', 'album'
+            qt = 'albums'
         elif query_type is DownloadTypeEnum.track:
-            qt, mode = 'track', 'track'
+            qt = 'tracks'
         else:
             raise self.exception(f'Query type {query_type.name} is unsupported')
-        results = self.websession.search(qt+'s', query, limit*4 if qt == 'playlist' else limit)
+        results = self.websession.search(qt, query, limit)
         
-        search_results, i = [], 0
-        for result in results['collection']:
-            if qt != 'playlist' or (qt == 'playlist' and ((result['is_album'] and mode == 'album') or (not result['is_album'] and mode == 'playlist'))):
-                id_ = result['id']
-                search_results.append(SearchResult(
-                    result_id = id_,
-                    name = result['title'] if qt != 'user' else result['username'],
-                    artists = [result['user']['username']] if qt != 'user' else None,
-                    extra_kwargs = {'data': {id_: result}}
-                ))
-                i += 1
-            if i >= limit:
-                break
-    
-        return search_results
+        return [SearchResult(
+            result_id = result['id'],
+            name = result['title'] if qt != 'users' else result['username'],
+            artists = self.artists_split(result['user']['username']) if qt != 'users' else None,
+            extra_kwargs = {'data': {result['id'] : result}}
+        ) for result in results['collection']]
+
 
     def get_track_download(self, track_url, download_url, codec, track_authorization):
         if not download_url: download_url = self.websession.get_track_stream_link(track_url, track_authorization)
@@ -98,50 +96,52 @@ class ModuleInterface:
                 file_url_headers = {"Authorization": "OAuth " + self.websession.access_token}
             )
 
-    def get_track_info(self, track_id, quality_tier: QualityEnum, codec_options: CodecOptions, data, ignore=False):
-        track_data = data[track_id]
-        metadata = track_data.get('publisher_metadata')
-        metadata = metadata if metadata else {}
+
+    def get_track_info(self, track_id, quality_tier: QualityEnum, codec_options: CodecOptions, data={}):
+        track_data = data[track_id] if track_id in data else self.websession._get('tracks/' + track_id)
+        metadata = track_data.get('publisher_metadata', {})
 
         file_url, download_url, codec, error = None, None, CodecEnum.AAC, None
         if track_data['downloadable']:
             download_url = self.websession.get_track_download(track_id)
             codec = CodecEnum[self.websession.s.head(download_url).headers['Content-Type'].split('/')[1].replace('mpeg', 'mp3').replace('ogg', 'vorbis').upper()]
         elif track_data['streamable']:
-            for i in track_data['media']['transcodings']: # TODO: add support for lower quality tiers
-                if i['format']['protocol'] == 'progressive':
-                    file_url = i['url']
-                    codec = CodecEnum[i['preset'].split('_')[0].upper()]
-                    break
+            if track_data['media']['transcodings']:
+                for i in track_data['media']['transcodings']: # TODO: add support for lower quality tiers
+                    if i['format']['protocol'] == 'progressive':
+                        file_url = i['url']
+                        codec = CodecEnum[i['preset'].split('_')[0].upper()]
+                        break
+                else:
+                    error = 'Track requires HLS, so it cannot be downloaded by this module until a later update'
             else:
                 error = 'Track not streamable'
         else:
             error = 'Track not streamable'
-        
-        tags = Tags(
-            genres = [track_data['genre'].split('/')] if 'genre' in track_data else None,
-            composer = metadata.get('writer_composer'),
-            copyright = metadata.get('p_line'),
-            upc = metadata.get('upc_or_ean'),
-            isrc = metadata.get('isrc')
-        )
 
         return TrackInfo(
-            name = track_data['title'],
+            name = track_data['title'].split(' - ')[1] if ' - ' in track_data['title'] else track_data['title'],
             album = metadata.get('album_title'),
             album_id = '',
-            artists = (metadata['artist'] if 'artist' in metadata else track_data['user']['username']).replace(' x ', ', ').split(', '),
+            artists = self.artists_split(metadata['artist'] if metadata.get('artist') else track_data['user']['username']),
             artist_id = '' if 'artist' in metadata else track_data['user']['permalink'],
             download_extra_kwargs = {'track_url': file_url, 'download_url': download_url, 'codec': codec, 'track_authorization': track_data['track_authorization']},
             codec = codec,
             sample_rate = 48,
             release_year = self.get_release_year(track_data),
-            cover_url = track_data['artwork_url'].replace('-large', '-original'), # format doesn't work here?
-            tags = tags,
+            cover_url = self.artwork_url_format(track_data['artwork_url']),
             explicit = metadata.get('explicit'),
-            error = error
+            error = error,
+            tags =  Tags(
+                genres = [track_data['genre'].split('/')] if 'genre' in track_data else None,
+                composer = metadata.get('writer_composer'),
+                copyright = metadata.get('p_line'),
+                upc = metadata.get('upc_or_ean'),
+                isrc = metadata.get('isrc')
+            )
         )
     
+
     def get_album_info(self, album_id, data):
         playlist_data = data[album_id]
         playlist_tracks = self.websession.get_tracks_from_tracklist(playlist_data['tracks'])
@@ -149,12 +149,13 @@ class ModuleInterface:
             name = playlist_data['title'],
             artist = playlist_data['user']['username'],
             artist_id = playlist_data['user']['permalink'],
-            cover_url = playlist_data['artwork_url'].replace('-large', '-original') if playlist_data['artwork_url'] else None,
+            cover_url = self.artwork_url_format(playlist_data['artwork_url']),
             release_year = self.get_release_year(playlist_data),
             tracks = list(playlist_tracks.keys()),
             track_extra_kwargs = {'data': playlist_tracks}
         )
     
+
     def get_playlist_info(self, playlist_id, data):
         playlist_data = data[playlist_id]
         playlist_tracks = self.websession.get_tracks_from_tracklist(playlist_data['tracks'])
@@ -162,11 +163,12 @@ class ModuleInterface:
             name = playlist_data['title'],
             creator = playlist_data['user']['username'],
             creator_id = playlist_data['user']['permalink'],
-            cover_url = playlist_data['artwork_url'].replace('-large', '-original') if playlist_data['artwork_url'] else None,
+            cover_url = self.artwork_url_format(playlist_data['artwork_url']),
             release_year = self.get_release_year(playlist_data),
             tracks = list(playlist_tracks.keys()),
             track_extra_kwargs = {'data': playlist_tracks}
         )
+
 
     def get_artist_info(self, artist_id, get_credited_albums, data):
         album_data, track_data = self.websession.get_user_albums_tracks(artist_id)
@@ -175,5 +177,5 @@ class ModuleInterface:
             albums = list(album_data.keys()),
             album_extra_kwargs = {'data': album_data},
             tracks = list(track_data.keys()),
-            track_extra_kwargs = {'data': track_data, 'ignore': True}
+            track_extra_kwargs = {'data': track_data}
         )
