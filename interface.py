@@ -99,7 +99,7 @@ class ModuleInterface:
 
     def get_track_info(self, track_id, quality_tier: QualityEnum, codec_options: CodecOptions, data={}):
         track_data = data[track_id] if track_id in data else self.websession._get('tracks/' + track_id)
-        metadata = track_data.get('publisher_metadata', {})
+        metadata = track_data.get('publisher_metadata') or {}
 
         file_url, download_url, codec, error = None, None, CodecEnum.AAC, None
         if track_data['downloadable']:
@@ -122,7 +122,7 @@ class ModuleInterface:
         return TrackInfo(
             name = track_data['title'].split(' - ')[1] if ' - ' in track_data['title'] else track_data['title'],
             album = metadata.get('album_title'),
-            album_id = '',
+            album_id = track_id,
             artists = self.artists_split(metadata['artist'] if metadata.get('artist') else track_data['user']['username']),
             artist_id = '' if 'artist' in metadata else track_data['user']['permalink'],
             download_extra_kwargs = {'track_url': file_url, 'download_url': download_url, 'codec': codec, 'track_authorization': track_data['track_authorization']},
@@ -133,7 +133,9 @@ class ModuleInterface:
             explicit = metadata.get('explicit'),
             error = error,
             tags =  Tags(
-                genres = [track_data['genre'].split('/')] if 'genre' in track_data else None,
+                track_number = int(list(data.keys()).index(track_id)) + 1 if data.get(track_id) else 1,
+                release_date = track_data['created_at'].split('T')[0] if track_data.get("created_at") else None,
+                genres = track_data['genre'].split('/') if 'genre' in track_data else None,
                 composer = metadata.get('writer_composer'),
                 copyright = metadata.get('p_line'),
                 upc = metadata.get('upc_or_ean'),
@@ -144,7 +146,7 @@ class ModuleInterface:
 
     def get_album_info(self, album_id, data):
         playlist_data = data[album_id]
-        playlist_tracks = self.websession.get_tracks_from_tracklist(playlist_data['tracks'])
+        playlist_tracks = self.websession.get_tracks_from_tracklist(playlist_data['tracks']) if playlist_data.get('tracks') else {}
         return AlbumInfo(
             name = playlist_data['title'],
             artist = playlist_data['user']['username'],
