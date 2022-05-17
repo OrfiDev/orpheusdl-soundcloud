@@ -133,8 +133,8 @@ class ModuleInterface:
             explicit = metadata.get('explicit'),
             error = error,
             tags =  Tags(
-                track_number = int(list(data.keys()).index(track_id))+1,
-                release_date = track_data['created_at'].split('T')[0],
+                track_number = int(list(data.keys()).index(track_id)) + 1 if data.get(track_id) else 1,
+                release_date = track_data['created_at'].split('T')[0] if track_data.get("created_at") else None,
                 genres = track_data['genre'].split('/') if 'genre' in track_data else None,
                 composer = metadata.get('writer_composer'),
                 copyright = metadata.get('p_line'),
