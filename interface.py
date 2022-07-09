@@ -129,7 +129,7 @@ class ModuleInterface:
             codec = codec,
             sample_rate = 48,
             release_year = self.get_release_year(track_data),
-            cover_url = self.artwork_url_format(track_data['artwork_url']),
+            cover_url = self.artwork_url_format(playlist_data.get('artwork_url') or playlist_data['user']['avatar_url']),
             explicit = metadata.get('explicit'),
             error = error,
             tags =  Tags(
@@ -151,7 +151,7 @@ class ModuleInterface:
             name = playlist_data['title'],
             artist = playlist_data['user']['username'],
             artist_id = playlist_data['user']['permalink'],
-            cover_url = self.artwork_url_format(playlist_data['artwork_url']),
+            cover_url = self.artwork_url_format(playlist_data.get('artwork_url') or playlist_data['user']['avatar_url']),
             release_year = self.get_release_year(playlist_data),
             tracks = list(playlist_tracks.keys()),
             track_extra_kwargs = {'data': playlist_tracks}
