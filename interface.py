@@ -102,7 +102,7 @@ class ModuleInterface:
         metadata = track_data.get('publisher_metadata') or {}
 
         file_url, download_url, codec, error = None, None, CodecEnum.AAC, None
-        if track_data['downloadable']:
+        if track_data['downloadable'] and track_data['has_downloads_left']:
             download_url = self.websession.get_track_download(track_id)
             codec = CodecEnum[self.websession.s.head(download_url).headers['Content-Type'].split('/')[1].replace('mpeg', 'mp3').replace('ogg', 'vorbis').upper()]
         elif track_data['streamable']:
