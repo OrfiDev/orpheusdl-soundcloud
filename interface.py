@@ -22,7 +22,7 @@ class ModuleInterface:
         settings = module_controller.module_settings
         self.websession = SoundCloudWebAPI(settings['web_access_token'], module_controller.module_error)
 
-        self.artists_split = lambda artists_string: artists_string.replace(' & ', ', ').replace(' and ', ', ').replace(' x ', ', ').split(', ') if ', ' in artists_string else [artists_string]
+        self.artists_split = lambda artists_string: artists_string.replace(' & ', ', ').replace(' and ', ', ').replace(' x ', ', ').split(', ')
         self.artwork_url_format = lambda artwork_url: artwork_url.replace('-large', '-original') if artwork_url else None
     
 
