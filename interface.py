@@ -122,7 +122,7 @@ class ModuleInterface:
         return TrackInfo(
             name = track_data['title'].split(' - ')[1] if ' - ' in track_data['title'] else track_data['title'],
             album = metadata.get('album_title'),
-            album_id = track_id,
+            album_id = '',
             artists = self.artists_split(metadata['artist'] if metadata.get('artist') else track_data['user']['username']),
             artist_id = '' if 'artist' in metadata else track_data['user']['permalink'],
             download_extra_kwargs = {'track_url': file_url, 'download_url': download_url, 'codec': codec, 'track_authorization': track_data['track_authorization']},
